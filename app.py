@@ -19,9 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-print("🚀 Initializing EasyOCR Engine...")
-reader = easyocr.Reader(['en'], gpu=False)
-print("✅ OCR & Legal Metrology Engine Ready!")
+reader = None
+
+def get_reader():
+    global reader
+    if reader is None:
+        print("🚀 Initializing EasyOCR Engine on demand...")
+        reader = easyocr.Reader(['en'], gpu=False)
+        print("✅ OCR & Legal Metrology Engine Ready!")
+    return reader
 
 # Real-time Live Analytics Store aligned with PARAKH™ Design Board
 analytics_data = {
@@ -136,7 +142,8 @@ async def scan_product(file: UploadFile = File(...)):
     
     # 2. Optical Recognition with Adaptive Multi-Angle Fallback
     # First attempt at standard 0° orientation
-    results = reader.readtext(np.array(image))
+    ocr_reader = get_reader()
+    results = ocr_reader.readtext(np.array(image))
     chosen_angle = 0
 
     # If the product was held vertically or sideways (few text lines found),
@@ -144,7 +151,7 @@ async def scan_product(file: UploadFile = File(...)):
     if len(results) < 4:
         for angle in [90, 270, 180]:
             rotated_img = image.rotate(angle, expand=True)
-            rotated_results = reader.readtext(np.array(rotated_img))
+            rotated_results = ocr_reader.readtext(np.array(rotated_img))
             if len(rotated_results) > len(results):
                 results = rotated_results
                 chosen_angle = angle
