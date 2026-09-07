@@ -1,3 +1,14 @@
+---
+title: Parakh Portal
+emoji: 🏛️
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 # 🇮🇳 PARAKH™ — Packaged Article Review and Assessment Kompliance Hub
 ### Smart India Hackathon 2026 — Problem Statement ID: SIH-26034
 **Ministry of Consumer Affairs, Food & Public Distribution**  
