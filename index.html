@@ -1526,8 +1526,9 @@
     </div>
   </div>
 
-  <!-- Hidden File Input for Image Upload -->
+  <!-- Hidden File Inputs for Image Upload & Mobile Camera Capture -->
   <input id="global-file-input" type="file" accept="image/*" class="hidden" onchange="handleFileUpload(event)">
+  <input id="mobile-camera-input" type="file" accept="image/*" capture="environment" class="hidden" onchange="handleFileUpload(event)">
 
   <!-- ========================================================================= -->
   <!-- JAVASCRIPT: APPLICATION LOGIC & ROUTING -->
@@ -1605,18 +1606,65 @@
       }
     }
 
-    // Camera HUD controls
+    // High-performance client-side image optimizer for instant uploads & low-RAM inference
+    async function prepareImageForScan(fileOrBlob) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const MAX_DIM = 1280;
+            let w = img.width;
+            let h = img.height;
+            if (w > MAX_DIM || h > MAX_DIM) {
+              if (w > h) {
+                h = Math.round((h * MAX_DIM) / w);
+                w = MAX_DIM;
+              } else {
+                w = Math.round((w * MAX_DIM) / h);
+                h = MAX_DIM;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            canvas.toBlob((blob) => {
+              const processedFile = new File([blob], "label_scan.jpg", { type: "image/jpeg" });
+              resolve({
+                file: processedFile,
+                dataUrl: canvas.toDataURL('image/jpeg', 0.88)
+              });
+            }, 'image/jpeg', 0.88);
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(fileOrBlob);
+      });
+    }
+
+    // Camera HUD controls with seamless mobile fallback
     async function openLiveCameraHUD() {
+      // Check if getUserMedia is supported in the browser environment (requires HTTPS or localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        document.getElementById('mobile-camera-input').click();
+        return;
+      }
+
       const hud = document.getElementById('modal-camera-hud');
       const video = document.getElementById('hud-video');
       hud.classList.remove('hidden');
 
       try {
-        hudStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        hudStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } } 
+        });
         video.srcObject = hudStream;
       } catch (err) {
-        alert("Camera access unavailable. Please use file upload.");
+        console.warn("Direct webcam stream unavailable, opening native mobile camera:", err);
         closeLiveCameraHUD();
+        document.getElementById('mobile-camera-input').click();
       }
     }
 
@@ -1628,7 +1676,7 @@
       document.getElementById('modal-camera-hud').classList.add('hidden');
     }
 
-    function captureFromHUD() {
+    async function captureFromHUD() {
       const video = document.getElementById('hud-video');
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth || 640;
@@ -1636,35 +1684,33 @@
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
 
-      canvas.toBlob(blob => {
-        selectedFile = new File([blob], "camera_snap.jpg", { type: "image/jpeg" });
+      canvas.toBlob(async (blob) => {
+        closeLiveCameraHUD();
+        const prep = await prepareImageForScan(blob);
+        selectedFile = prep.file;
         currentImageElement.onload = function() {
           renderResultCanvas();
         };
-        currentImageElement.src = canvas.toDataURL('image/jpeg');
-        closeLiveCameraHUD();
+        currentImageElement.src = prep.dataUrl;
         runProcessingAndScan();
-      }, 'image/jpeg');
+      }, 'image/jpeg', 0.88);
     }
 
     function triggerFileUpload() {
       document.getElementById('global-file-input').click();
     }
 
-    function handleFileUpload(e) {
+    async function handleFileUpload(e) {
       const file = e.target.files[0];
       if (file) {
-        selectedFile = file;
-        const reader = new FileReader();
-        reader.onload = function(evt) {
-          currentImageElement.onload = function() {
-            renderResultCanvas();
-          };
-          currentImageElement.src = evt.target.result;
-          closeLiveCameraHUD();
-          runProcessingAndScan();
+        const prep = await prepareImageForScan(file);
+        selectedFile = prep.file;
+        currentImageElement.onload = function() {
+          renderResultCanvas();
         };
-        reader.readAsDataURL(file);
+        currentImageElement.src = prep.dataUrl;
+        closeLiveCameraHUD();
+        runProcessingAndScan();
       }
     }
 
@@ -1673,31 +1719,62 @@
       const modal = document.getElementById('modal-processing');
       modal.classList.remove('hidden');
 
-      // Animate progress steps
-      const steps = [
-        { icon: 'p-icon-1', val: 'p-val-1', pct: 20 },
-        { icon: 'p-icon-2', val: 'p-val-2', pct: 45 },
-        { icon: 'p-icon-3', val: 'p-val-3', pct: 70 },
-        { icon: 'p-icon-4', val: 'p-val-4', pct: 90 },
-        { icon: 'p-icon-5', val: 'p-val-5', pct: 100 }
-      ];
-
-      for (let i = 0; i < steps.length; i++) {
-        await new Promise(r => setTimeout(r, 200));
-        document.getElementById('processing-master-bar').style.width = `${steps[i].pct}%`;
-        document.getElementById(steps[i].icon).innerText = '✔';
-        document.getElementById(steps[i].val).innerText = '100%';
-      }
+      // Reset modal state
+      document.getElementById('processing-master-bar').style.width = '20%';
+      document.getElementById('p-icon-1').innerText = '✔';
+      document.getElementById('p-val-1').innerText = '100%';
+      document.getElementById('p-icon-2').innerText = '⏳';
+      document.getElementById('p-val-2').innerText = 'Scanning...';
+      document.getElementById('p-icon-3').innerText = '○';
+      document.getElementById('p-val-3').innerText = '0%';
+      document.getElementById('p-icon-4').innerText = '○';
+      document.getElementById('p-val-4').innerText = '0%';
+      document.getElementById('p-icon-5').innerText = '○';
+      document.getElementById('p-val-5').innerText = '0%';
 
       // API Call
       const formData = new FormData();
       formData.append('file', selectedFile);
+
+      // Progressive visual feedback while server processes OCR
+      const progressTimer = setInterval(() => {
+        const bar = document.getElementById('processing-master-bar');
+        let currentWidth = parseInt(bar.style.width) || 20;
+        if (currentWidth < 85) {
+          bar.style.width = `${currentWidth + 15}%`;
+          if (currentWidth >= 40) {
+            document.getElementById('p-icon-2').innerText = '✔';
+            document.getElementById('p-val-2').innerText = '100%';
+            document.getElementById('p-icon-3').innerText = '⏳';
+            document.getElementById('p-val-3').innerText = 'Mapping...';
+          }
+          if (currentWidth >= 65) {
+            document.getElementById('p-icon-3').innerText = '✔';
+            document.getElementById('p-val-3').innerText = '100%';
+            document.getElementById('p-icon-4').innerText = '⏳';
+            document.getElementById('p-val-4').innerText = 'Auditing...';
+          }
+        }
+      }, 400);
 
       try {
         const response = await fetch(`${API_BASE}/scan`, {
           method: 'POST',
           body: formData
         });
+
+        clearInterval(progressTimer);
+
+        if (!response.ok) {
+          throw new Error(`Server returned status ${response.status}`);
+        }
+
+        document.getElementById('processing-master-bar').style.width = '100%';
+        document.getElementById('p-icon-4').innerText = '✔';
+        document.getElementById('p-val-4').innerText = '100%';
+        document.getElementById('p-icon-5').innerText = '✔';
+        document.getElementById('p-val-5').innerText = '100%';
+
         const data = await response.json();
         lastScanData = data;
         populateInspectionResult(data);
@@ -1705,9 +1782,13 @@
         loadDashboardData();
         navigateTo('result');
       } catch (err) {
-        alert("Server communication error. Make sure uvicorn backend is running!");
+        clearInterval(progressTimer);
+        console.error("Scan error:", err);
+        alert("Server communication error: " + (err.message || "Please check backend connection."));
       } finally {
-        modal.classList.add('hidden');
+        setTimeout(() => {
+          modal.classList.add('hidden');
+        }, 300);
       }
     }
 
