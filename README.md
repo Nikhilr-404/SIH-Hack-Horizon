@@ -1,5 +1,5 @@
 ---
-title: Parakh Portal
+title: PARAKH
 emoji: 🏛️
 colorFrom: indigo
 colorTo: purple
