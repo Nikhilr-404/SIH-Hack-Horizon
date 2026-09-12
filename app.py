@@ -5,9 +5,19 @@ import easyocr
 import re
 import io
 import os
+import gc
 import datetime
+import torch
 from PIL import Image, ImageOps
 import numpy as np
+
+# Restrict PyTorch thread pool to prevent container memory exhaustion
+torch.set_num_threads(1)
+if hasattr(torch, "set_num_interop_threads"):
+    try:
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
 
 app = FastAPI(title="MetrologyGuard AI - SIH 2026 PS-26034")
 
@@ -24,10 +34,18 @@ reader = None
 def get_reader():
     global reader
     if reader is None:
-        print("🚀 Initializing EasyOCR Engine on demand...")
-        reader = easyocr.Reader(['en'], gpu=False)
+        print("🚀 Initializing EasyOCR Engine (low-memory container mode)...")
+        reader = easyocr.Reader(['en'], gpu=False, quantize=False)
         print("✅ OCR & Legal Metrology Engine Ready!")
     return reader
+
+@app.on_event("startup")
+def startup_warmup():
+    print("⚡ Pre-warming OCR Engine at startup...")
+    try:
+        get_reader()
+    except Exception as e:
+        print(f"Startup warmup note: {e}")
 
 # Real-time Live Analytics Store aligned with PARAKH™ Design Board
 analytics_data = {
@@ -139,14 +157,16 @@ async def scan_product(file: UploadFile = File(...)):
     
     # 1. Open image and normalize mobile camera EXIF orientation
     raw_image = Image.open(io.BytesIO(contents))
+    del contents  # Release raw upload bytes immediately
     image = ImageOps.exif_transpose(raw_image).convert('RGB')
+    raw_image.close()
+    del raw_image
     orig_w, orig_h = image.size
     
-    # 2. Smart downscaling for ultra-fast OCR & low-memory footprint (prevents 512MB OOM)
-    # 1280px provides crisp character detection while using 85% less RAM & CPU time
+    # 2. Smart downscaling for fast OCR & strictly controlled memory footprint
     max_dim = max(orig_w, orig_h)
-    if max_dim > 1280:
-        scale_factor = 1280.0 / max_dim
+    if max_dim > 1024:
+        scale_factor = 1024.0 / max_dim
         proc_w = int(orig_w * scale_factor)
         proc_h = int(orig_h * scale_factor)
         ocr_image = image.resize((proc_w, proc_h), Image.Resampling.BILINEAR)
@@ -154,6 +174,8 @@ async def scan_product(file: UploadFile = File(...)):
         scale_factor = 1.0
         proc_w, proc_h = orig_w, orig_h
         ocr_image = image
+    
+    del image  # Release unscaled image buffer
     
     # 3. Optical Recognition with Adaptive Multi-Angle Fallback
     ocr_reader = get_reader()
@@ -291,6 +313,9 @@ async def scan_product(file: UploadFile = File(...)):
         "issues": issues_count
     })
     analytics_data["recent_history"] = analytics_data["recent_history"][:8]
+
+    # Clean memory immediately after scan finishes
+    gc.collect()
 
     return {
         "score": score,
